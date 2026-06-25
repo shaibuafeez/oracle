@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>予測 ORACLE · A Prediction Almanac</title>
+<meta name="description" content="A minimal prediction-market terminal priced by the real DeepBook Predict SVI / N(d2) engine." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --paper:#f3ede0;
+    --paper-2:#efe8d8;
+    --ink:#1b1812;
+    --ink-2:#4f4a40;
+    --dim:#7a7264;
+    --faint:#a59c8c;
+    --rule:rgba(27,24,18,.16);
+    --rule-soft:rgba(27,24,18,.09);
+    --rule-strong:rgba(27,24,18,.85);
+    --up:#2f7d4f;          /* ledger green */
+    --up-tint:rgba(47,125,79,.10);
+    --down:#c0381c;        /* vermilion / oxblood */
+    --down-tint:rgba(192,56,28,.10);
+    --gold:#9a6a1e;
+    --serif:"Instrument Serif", Georgia, "Times New Roman", serif;
+    --mono:"IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --jp:"Hiragino Mincho ProN", "Yu Mincho", serif;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ min-height:100%; }
+  body{
+    font-family:var(--mono); font-weight:400; color:var(--ink); background:var(--paper);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    font-variant-numeric:tabular-nums; line-height:1.5; overflow-x:hidden;
+  }
+  /* paper atmosphere */
+  body::before{ content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+    background:
+      radial-gradient(140% 120% at 50% -20%, #f8f3e8, transparent 55%),
+      radial-gradient(120% 120% at 100% 120%, rgba(154,106,30,.06), transparent 50%);
+  }
+  body::after{ content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.045; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+  .wrap{ max-width:1320px; margin:0 auto; padding:0 clamp(18px,4vw,46px); }
+
+  /* ── masthead ── */
+  .masthead{ padding:26px 0 0; }
+  .kicker-rule{ display:flex; align-items:center; justify-content:space-between; font-size:10px; letter-spacing:.28em; text-transform:uppercase; color:var(--dim); padding-bottom:10px; }
+  .kicker-rule .mid{ color:var(--faint); }
+  .nameplate{ display:flex; align-items:flex-end; justify-content:space-between; gap:20px; padding:14px 0 12px; border-top:1.5px solid var(--rule-strong); border-bottom:1.5px solid var(--rule-strong); position:relative; }
+  .nameplate::after{ content:""; position:absolute; left:0; right:0; bottom:-5px; height:1px; background:var(--rule-strong); }
+  .title{ display:flex; align-items:baseline; gap:16px; }
+  .title .kanji{ font-family:var(--jp); font-size:clamp(34px,5vw,52px); line-height:.9; letter-spacing:.02em; }
+  .title .en{ font-family:var(--serif); font-size:clamp(30px,4.6vw,48px); line-height:.9; letter-spacing:.01em; }
+  .title .en i{ color:var(--down); font-style:italic; }
+  .edition{ text-align:right; font-size:11px; letter-spacing:.06em; color:var(--ink-2); line-height:1.85; padding-bottom:4px; }
+  .edition b{ color:var(--ink); font-weight:500; }
+  .badge{ display:inline-flex; align-items:center; gap:7px; }
+  .badge .dot{ width:7px; height:7px; border-radius:50%; background:var(--up); animation:pulse 2.4s ease-in-out infinite; }
+  .badge.sim .dot{ background:var(--gold); }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ── grid ── */
+  .grid{ display:grid; grid-template-columns:236px minmax(0,1fr) 296px; gap:0; margin-top:28px; }
+  .sep{ border-left:1px solid var(--rule-soft); }
+  .col{ padding:6px clamp(16px,2.2vw,30px) 40px; }
+  .col.left{ padding-left:0; } .col.right{ padding-right:0; }
+  .sec-h{ display:flex; align-items:center; gap:10px; font-size:10px; letter-spacing:.26em; text-transform:uppercase; color:var(--dim); margin:6px 0 16px; }
+  .sec-h .ln{ flex:1; height:1px; background:var(--rule); }
+
+  /* ── markets ledger ── */
+  .market{ width:100%; text-align:left; background:transparent; border:none; border-bottom:1px solid var(--rule-soft); cursor:pointer; font:inherit;
+    padding:13px 8px 13px 12px; position:relative; transition:background .2s; }
+  .market:hover{ background:rgba(27,24,18,.035); }
+  .market.active{ background:rgba(27,24,18,.05); }
+  .market.active::before{ content:""; position:absolute; left:0; top:9px; bottom:9px; width:3px; background:var(--down); }
+  .market .r1{ display:flex; align-items:center; justify-content:space-between; }
+  .market .nm{ display:flex; align-items:center; gap:10px; }
+  .market .gl{ width:18px; text-align:center; font-size:15px; }
+  .market .tk{ font-size:14px; font-weight:500; letter-spacing:.04em; }
+  .market .pb{ font-family:var(--serif); font-size:21px; line-height:1; }
+  .market .r2{ display:flex; justify-content:space-between; margin-top:6px; font-size:11px; color:var(--dim); }
+  .market .r2 b{ color:var(--ink-2); font-weight:500; }
+
+  /* ── board hero ── */
+  .board-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:24px; flex-wrap:wrap; padding-bottom:4px; }
+  .lead{ display:flex; align-items:center; gap:13px; }
+  .lead .gl{ font-size:26px; }
+  .lead .nm{ font-family:var(--serif); font-size:26px; line-height:1; }
+  .lead .nm small{ display:block; font-family:var(--mono); font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:var(--faint); margin-top:5px; }
+  .head-meta{ display:flex; gap:26px; }
+  .stat{ text-align:right; }
+  .stat .k{ font-size:9.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--faint); }
+  .stat .v{ font-family:var(--serif); font-size:22px; line-height:1.15; margin-top:2px; }
+  .stat .v.up{ color:var(--up); } .stat .v.down{ color:var(--down); }
+
+  .hero{ margin:26px 0 6px; }
+  .hero .q{ font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--dim); }
+  .hero .q b{ color:var(--ink); font-weight:500; }
+  .prob{ font-family:var(--serif); font-weight:400; line-height:.82; letter-spacing:-.015em; display:flex; align-items:baseline; gap:.04em;
+    font-size:clamp(84px,15vw,184px); margin:6px 0 0; }
+  .prob i{ font-style:normal; font-size:.26em; color:var(--dim); font-family:var(--mono); transform:translateY(-.15em); }
+  .hero .sub{ display:flex; gap:22px; margin-top:10px; padding-top:12px; border-top:1px solid var(--rule); font-size:12px; color:var(--dim); }
+  .hero .sub b{ color:var(--ink); font-weight:500; }
+
+  /* ── chart ── */
+  .chart{ margin:22px 0 4px; }
+  .plot{ width:100%; aspect-ratio:1000/320; }
+  .plot svg{ width:100%; height:100%; display:block; cursor:crosshair; overflow:visible; }
+  .gridline{ stroke:var(--rule-soft); stroke-width:1; vector-effect:non-scaling-stroke; }
+  .gridline.mid{ stroke:var(--rule); stroke-dasharray:2 4; }
+  .axis-y, .axis-x{ font-family:var(--mono); font-size:10px; letter-spacing:.06em; }
+  .axis-y{ fill:var(--faint); }
+  .axis-x{ fill:var(--dim); }
+  .area{ stroke:none; }
+  .curve{ fill:none; stroke:url(#g); stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+  .mk-line{ stroke:var(--ink); stroke-width:1; stroke-dasharray:2 3; vector-effect:non-scaling-stroke; opacity:.55; }
+  .mk-dot-h{ fill:rgba(27,24,18,.10); }
+  .mk-dot{ stroke-width:2.4; vector-effect:non-scaling-stroke; }
+
+  /* ── strike control ── */
+  .strike-ctl{ margin-top:16px; }
+  .strike-row{ display:flex; align-items:baseline; justify-content:space-between; }
+  .strike-row .lbl{ font-size:10px; letter-spacing:.24em; text-transform:uppercase; color:var(--faint); }
+  .strike-row .val{ font-family:var(--serif); font-size:30px; }
+  input[type=range]{ -webkit-appearance:none; appearance:none; width:100%; height:26px; background:transparent; cursor:ew-resize; margin-top:6px; }
+  input[type=range]::-webkit-slider-runnable-track{ height:2px; background:linear-gradient(90deg,var(--up),var(--faint) 50%,var(--down)); }
+  input[type=range]::-moz-range-track{ height:2px; background:linear-gradient(90deg,var(--up),var(--faint) 50%,var(--down)); }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:15px; height:15px; margin-top:-6.5px; border-radius:50%;
+    background:var(--ink); border:2.5px solid var(--paper); box-shadow:0 0 0 1px var(--rule), 0 3px 8px rgba(0,0,0,.18); transition:transform .15s; }
+  input[type=range]:active::-webkit-slider-thumb{ transform:scale(1.18); }
+  input[type=range]::-moz-range-thumb{ width:14px; height:14px; border-radius:50%; background:var(--ink); border:2.5px solid var(--paper); box-shadow:0 0 0 1px var(--rule); }
+  .ladder{ display:flex; justify-content:space-between; margin-top:3px; font-size:10px; color:var(--faint); letter-spacing:.04em; }
+  .ladder .atm{ color:var(--dim); }
+
+  /* ── quote tiles ── */
+  .quotes{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:26px; }
+  .tile{ border:1px solid var(--rule); background:rgba(255,255,255,.28); padding:15px 16px 14px; cursor:pointer; position:relative;
+    transition:border-color .2s, background .2s, transform .2s; }
+  .tile:hover{ transform:translateY(-2px); }
+  .tile .th{ display:flex; align-items:center; justify-content:space-between; }
+  .tile .dir{ font-size:10px; letter-spacing:.2em; text-transform:uppercase; }
+  .tile.up .dir{ color:var(--up); } .tile.down .dir{ color:var(--down); }
+  .tile .ar{ font-size:12px; }
+  .tile.up .ar{ color:var(--up); } .tile.down .ar{ color:var(--down); }
+  .tile .ask{ font-family:var(--serif); font-size:46px; line-height:1; margin:10px 0 0; }
+  .tile .ask em{ font-style:normal; font-size:.36em; color:var(--dim); font-family:var(--mono); margin-left:3px; }
+  .tile .tf{ display:flex; justify-content:space-between; margin-top:12px; padding-top:10px; border-top:1px solid var(--rule-soft); font-size:11px; color:var(--dim); }
+  .tile .tf b{ color:var(--ink); font-weight:500; }
+  .tile.up.sel{ border-color:var(--up); background:var(--up-tint); }
+  .tile.down.sel{ border-color:var(--down); background:var(--down-tint); }
+
+  /* ── order slip ── */
+  .seg{ display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--rule); margin-bottom:18px; }
+  .seg button{ font:inherit; font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim); background:transparent; border:none;
+    padding:12px 0; cursor:pointer; transition:.2s; }
+  .seg button + button{ border-left:1px solid var(--rule); }
+  .seg button.on.up{ background:var(--up); color:var(--paper); font-weight:500; }
+  .seg button.on.down{ background:var(--down); color:var(--paper); font-weight:500; }
+  .qty{ display:flex; align-items:center; justify-content:space-between; border:1px solid var(--rule); padding:8px 8px 8px 14px; margin-bottom:20px; }
+  .qty .ql{ font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--faint); }
+  .qty .qb{ display:flex; align-items:center; gap:6px; }
+  .qty input{ width:54px; font:inherit; font-size:19px; text-align:right; color:var(--ink); background:transparent; border:none; outline:none; }
+  .qty .st{ width:28px; height:28px; border:1px solid var(--rule); background:transparent; color:var(--ink); font-size:15px; cursor:pointer; transition:.2s; }
+  .qty .st:hover{ background:rgba(27,24,18,.05); }
+
+  .slip{ display:flex; flex-direction:column; gap:11px; }
+  .srow{ display:flex; align-items:baseline; font-size:12.5px; }
+  .srow .k{ white-space:nowrap; color:var(--dim); }
+  .srow .ld{ flex:1; margin:0 7px; border-bottom:1px dotted var(--rule); position:relative; top:-3px; height:0; }
+  .srow .v{ white-space:nowrap; font-weight:500; }
+  .srow .v.up{ color:var(--up); } .srow .v.down{ color:var(--down); }
+  .srow.big{ padding-top:9px; margin-top:2px; border-top:1px solid var(--rule); }
+  .srow.big .k{ color:var(--ink); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
+  .srow.big .v{ font-family:var(--serif); font-size:26px; }
+
+  .place{ width:100%; font:inherit; font-size:12px; letter-spacing:.18em; text-transform:uppercase; font-weight:500; color:var(--paper);
+    border:none; padding:16px 0; cursor:pointer; margin-top:20px; transition:transform .12s, filter .2s; }
+  .place.up{ background:var(--up); } .place.down{ background:var(--down); }
+  .place:hover{ filter:brightness(1.08); } .place:active{ transform:translateY(1px); }
+  .note{ font-size:10.5px; color:var(--faint); line-height:1.6; margin-top:12px; }
+  .note b{ color:var(--dim); font-weight:500; }
+
+  .ledger{ margin-top:26px; padding-top:14px; border-top:1.5px solid var(--rule-strong); }
+  .ledger .lh{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
+  .ledger .lh .pl{ font-size:10px; letter-spacing:.24em; text-transform:uppercase; color:var(--dim); }
+  .ledger .pt{ font-family:var(--serif); font-size:18px; }
+  .pos{ display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--rule-soft); font-size:12px;
+    animation:slide .4s cubic-bezier(.2,.7,.2,1); }
+  @keyframes slide{ from{opacity:0; transform:translateY(-5px)} to{opacity:1; transform:none} }
+  .pos .pd{ font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+  .pos .pd.up{ color:var(--up); } .pos .pd.down{ color:var(--down); }
+  .pos .ps{ color:var(--dim); font-size:11px; margin-top:2px; }
+  .pos .pr{ text-align:right; }
+  .pos .ppl{ font-family:var(--serif); font-size:17px; }
+  .pos .ppl.gain{ color:var(--up); } .pos .ppl.loss{ color:var(--down); }
+  .pos .pc{ color:var(--faint); font-size:10px; margin-top:1px; }
+  .empty{ font-size:11.5px; color:var(--faint); line-height:1.65; padding:4px 0; }
+
+  footer{ margin-top:18px; padding:16px 0 30px; border-top:1px solid var(--rule); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
+    font-size:10.5px; color:var(--faint); letter-spacing:.04em; }
+  footer a{ color:var(--dim); text-decoration:none; border-bottom:1px solid var(--rule); }
+  footer a:hover{ color:var(--ink); }
+
+  .rv{ opacity:0; transform:translateY(8px); animation:rv .7s cubic-bezier(.2,.7,.2,1) forwards; }
+  @keyframes rv{ to{opacity:1; transform:none} }
+
+  /* ── wallet + execution ── */
+  .wallet-row{ display:flex; align-items:center; gap:9px; justify-content:flex-end; margin-top:5px; }
+  .wbtn{ font:inherit; font-size:11px; letter-spacing:.06em; color:var(--ink); background:transparent; border:1px solid var(--rule-strong); padding:6px 13px; cursor:pointer; transition:.2s; }
+  .wbtn:hover{ background:var(--ink); color:var(--paper); }
+  .wbtn.on{ border-color:var(--up); color:var(--up); }
+  .wbtn.on:hover{ background:var(--up); color:var(--paper); }
+  .wsub{ font-size:10.5px; color:var(--dim); }
+  .exec-mode{ font-size:10px; letter-spacing:.16em; text-transform:uppercase; margin-top:11px; text-align:center; }
+  .exec-mode.paper{ color:var(--faint); }
+  .exec-mode.live{ color:var(--up); }
+  .toast{ position:fixed; right:22px; bottom:22px; max-width:360px; background:var(--ink); color:var(--paper); font-size:12px; line-height:1.5;
+    padding:14px 17px; border-left:3px solid var(--faint); box-shadow:0 14px 44px rgba(0,0,0,.32); opacity:0; transform:translateY(12px);
+    pointer-events:none; transition:opacity .3s, transform .3s; z-index:50; letter-spacing:.01em; }
+  .toast.show{ opacity:1; transform:none; pointer-events:auto; }
+  .toast.pending{ border-color:var(--gold); } .toast.success{ border-color:var(--up); } .toast.error{ border-color:var(--down); }
+  .toast a{ color:var(--paper); text-decoration:underline; text-underline-offset:2px; margin-left:6px; white-space:nowrap; }
+  .pos .pc a{ color:var(--dim); text-decoration:none; border-bottom:1px solid var(--rule); }
+  .pos .pc a:hover{ color:var(--ink); }
+
+  @media (max-width:1080px){
+    .grid{ grid-template-columns:1fr; }
+    .sep{ border-left:none; border-top:1px solid var(--rule-soft); }
+    .col{ padding-left:0; padding-right:0; }
+  }
+  @media (max-width:560px){ .quotes{ grid-template-columns:1fr; } .head-meta{ gap:18px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ── masthead ── -->
+  <header class="masthead">
+    <div class="kicker-rule">
+      <span>Probability · Volatility · Settlement</span>
+      <span class="mid">A Prediction Almanac for DeepBook Predict</span>
+      <span id="clock">--:--:--</span>
+    </div>
+    <div class="nameplate">
+      <div class="title"><span class="kanji">予測</span><span class="en">Oracle<i>.</i></span></div>
+      <div class="edition">
+        <div><span class="badge sim" id="dataChip"><span class="dot"></span><b id="dataMode">seeded surface</b></span></div>
+        <div>Testnet Edition · No. <b>4·16</b> · settles in <b>DUSDC</b></div>
+        <div class="wallet-row">
+          <button class="wbtn" id="walletBtn">Connect Wallet</button>
+          <span class="wsub" id="walletSub"></span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- ── markets ── -->
+    <aside class="col left rv" style="animation-delay:.04s">
+      <div class="sec-h">The Markets <span class="ln"></span></div>
+      <div id="marketList"></div>
+    </aside>
+
+    <!-- ── board ── -->
+    <section class="col sep rv" style="animation-delay:.1s">
+      <div class="board-head">
+        <div class="lead">
+          <span class="gl" id="bGlyph">₿</span>
+          <span class="nm" id="bAsset">Bitcoin<small id="bSub">BTC market</small></span>
+        </div>
+        <div class="head-meta">
+          <div class="stat"><div class="k">Forward</div><div class="v" id="bFwd">$0</div></div>
+          <div class="stat"><div class="k">Expiry</div><div class="v" id="bExp">--</div></div>
+          <div class="stat"><div class="k">Impl Vol</div><div class="v" id="bIV">--%</div></div>
+        </div>
+      </div>
+
+      <div class="hero">
+        <div class="q">Probability that <b id="hAsset">BTC</b> settles above <b id="hStrike">$0</b></div>
+        <div class="prob"><span id="probBig">0.0</span><i>%</i></div>
+        <div class="sub">
+          <span>fair value <b id="fairCents">0.0¢</b></span>
+          <span>round-trip cost <b id="rtCost">0.0¢</b></span>
+          <span>spread to vault, both sides</span>
+        </div>
+      </div>
+
+      <div class="chart">
+        <div class="plot">
+          <svg id="curve" viewBox="0 0 1000 320" preserveAspectRatio="xMidYMid meet">
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="1000" y2="0" gradientUnits="userSpaceOnUse">
+                <stop offset="0"   stop-color="#2f7d4f"/>
+                <stop offset=".5"  stop-color="#9a6a1e"/>
+                <stop offset="1"   stop-color="#c0381c"/>
+              </linearGradient>
+              <linearGradient id="ag" x1="0" y1="0" x2="0" y2="300" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="rgba(47,125,79,.13)"/>
+                <stop offset="1" stop-color="rgba(47,125,79,0)"/>
+              </linearGradient>
+            </defs>
+            <line class="gridline"     x1="10" y1="18"    x2="990" y2="18"/>
+            <line class="gridline"     x1="10" y1="88.5"  x2="990" y2="88.5"/>
+            <line class="gridline mid" x1="10" y1="159"   x2="990" y2="159"/>
+            <line class="gridline"     x1="10" y1="229.5" x2="990" y2="229.5"/>
+            <line class="gridline"     x1="10" y1="300"   x2="990" y2="300"/>
+            <text class="axis-y" x="10" y="14">100%</text>
+            <text class="axis-y" x="10" y="155">50%</text>
+            <text class="axis-y" x="10" y="297">0%</text>
+            <path class="area"  id="curveArea" fill="url(#ag)"/>
+            <path class="curve" id="curvePath"/>
+            <line class="mk-line" id="markerLine" x1="500" y1="18" x2="500" y2="300"/>
+            <circle class="mk-dot-h" id="markerHalo" cx="500" cy="159" r="9"/>
+            <circle class="mk-dot" id="markerDot" cx="500" cy="159" r="4.6" fill="var(--paper)"/>
+            <g id="xticks"></g>
+          </svg>
+        </div>
+      </div>
+
+      <div class="strike-ctl">
+        <div class="strike-row">
+          <span class="lbl">Strike Price</span>
+          <span class="val" id="strikeVal">$0</span>
+        </div>
+        <input type="range" id="strike" min="0" max="100" value="50" step="1" />
+        <div class="ladder"><span id="ladMin">$0</span><span class="atm">at-the-money</span><span id="ladMax">$0</span></div>
+      </div>
+
+      <div class="quotes">
+        <div class="tile up sel" id="tileUp" data-dir="up">
+          <div class="th"><span class="dir">Up · settles higher</span><span class="ar">▲</span></div>
+          <div class="ask" id="upAsk">0.0<em>¢</em></div>
+          <div class="tf"><span>bid <b id="upBid">0.0¢</b></span><span>pays <b>$1.00</b></span></div>
+        </div>
+        <div class="tile down" id="tileDown" data-dir="down">
+          <div class="th"><span class="dir">Down · settles lower</span><span class="ar">▼</span></div>
+          <div class="ask" id="dnAsk">0.0<em>¢</em></div>
+          <div class="tf"><span>bid <b id="dnBid">0.0¢</b></span><span>pays <b>$1.00</b></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── order slip ── -->
+    <aside class="col right sep rv" style="animation-delay:.16s">
+      <div class="sec-h">Order Slip <span class="ln"></span></div>
+      <div class="seg">
+        <button id="segUp" class="on up" data-dir="up">Buy Up</button>
+        <button id="segDown" data-dir="down">Buy Down</button>
+      </div>
+      <div class="qty">
+        <span class="ql">Contracts</span>
+        <div class="qb">
+          <button class="st" id="qMinus">−</button>
+          <input id="qty" type="text" inputmode="numeric" value="10" />
+          <button class="st" id="qPlus">+</button>
+        </div>
+      </div>
+
+      <div class="slip">
+        <div class="srow"><span class="k">Entry price</span><span class="ld"></span><span class="v" id="sPrice">0.0¢</span></div>
+        <div class="srow"><span class="k">Max payout</span><span class="ld"></span><span class="v" id="sPayout">$0.00</span></div>
+        <div class="srow"><span class="k">Profit if right</span><span class="ld"></span><span class="v up" id="sProfit">$0.00</span></div>
+        <div class="srow"><span class="k">Return if right</span><span class="ld"></span><span class="v" id="sRoi">0%</span></div>
+        <div class="srow big"><span class="k">Cost</span><span class="ld"></span><span class="v" id="sCost">$0.00</span></div>
+      </div>
+
+      <button class="place up" id="placeBtn">Open Up Position</button>
+      <div class="exec-mode paper" id="execMode">Paper trade · connect wallet to mint</div>
+      <div class="note">Priced by the live <b>DeepBook Predict</b> engine — SVI surface → Black–Scholes <b>N(d₂)</b> → Bernoulli spread. Connect a Sui wallet to sign a real <b>openUp</b> mint on testnet (deposit → market_key → mint); otherwise it paper-trades against the live bid.</div>
+
+      <div class="ledger">
+        <div class="lh"><span class="pl">Open Positions</span><span class="pt" id="pnlTot">$0.00</span></div>
+        <div id="posList"><div class="empty">None yet. Choose a strike, take a side, open a paper position — it revalues live as the surface drifts.</div></div>
+      </div>
+    </aside>
+  </div>
+
+  <footer>
+    <span>予測 ORACLE — a minimal terminal for <a href="https://docs.sui.io/onchain-finance/deepbook-predict/" target="_blank" rel="noopener">DeepBook Predict</a></span>
+    <span>engine ported from <a href="https://github.com/yosuku-lab/predict-sdk" target="_blank" rel="noopener">@yosuku/deepbook-predict</a> · live on Sui testnet</span>
+  </footer>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════
+   DeepBook Predict pricing engine — faithful port of src/pricing.ts
+   SVI total variance → Black–Scholes digital N(d2) → Bernoulli spread.
+   ════════════════════════════════════════════════════════════════════ */
+const BASE_SPREAD=0.02, MIN_SPREAD=0.005, MIN_ASK=0.01, MAX_ASK=0.99, UTIL_MULT=2.0;
+const MS_PER_YEAR=31_536_000_000;
+const totalVariance=(s,k)=>s.a+s.b*(s.rho*(k-s.m)+Math.sqrt((k-s.m)**2+s.sigma**2));
+function normalCdf(x){ const sign=x<0?-1:1, z=Math.abs(x)/Math.SQRT2; const t=1/(1+0.3275911*z);
+  const y=1-((((1.061405429*t-1.453152027)*t+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-z*z);
+  return 0.5*(1+sign*y); }
+function digitalUp(svi,forward,strike){ const k=Math.log(strike/forward); const w=totalVariance(svi,k);
+  if(w<=0) return forward>strike?1:0; const d2=(Math.log(forward/strike)-w/2)/Math.sqrt(w); return normalCdf(d2); }
+const oneSidedSpread=(fair,u=0)=>Math.max(BASE_SPREAD*Math.sqrt(fair*(1-fair)),MIN_SPREAD)+BASE_SPREAD*UTIL_MULT*u**2;
+function quote(fair,u=0){ const s=oneSidedSpread(fair,u); const c=a=>Math.min(Math.max(a,MIN_ASK),MAX_ASK);
+  const upAsk=c(fair+s), dnAsk=c(1-fair+s); const upBid=Math.min(1-dnAsk,upAsk), dnBid=Math.min(1-upAsk,dnAsk);
+  return { fair, upAsk, upBid, dnAsk, dnBid, roundTrip:upAsk-upBid }; }
+const impliedVolAnnual=(svi,f,k,tY)=>Math.sqrt(Math.max(totalVariance(svi,Math.log(k/f)),0)/Math.max(tY,1e-9));
+const decodeSvi=r=>{ const n=x=>Number(x)/1e9; return { a:n(r.a), b:n(r.b),
+  rho:(r.rho_negative?-1:1)*n(r.rho), m:(r.m_negative?-1:1)*n(r.m), sigma:n(r.sigma) }; };
+
+/* ── markets ──
+   LIVE by default: a BTC term structure pulled straight from the real DeepBook
+   Predict testnet indexer (real forwards + real on-chain SVI surfaces, polled).
+   The seeded surfaces below are ONLY an offline fallback if the indexer is unreachable. */
+const NOW=Date.now();
+const FALLBACK=[
+  { id:'btc', oracleId:null, ticker:'BTC', name:'Bitcoin', glyph:'₿', dec:0, tick:250,
+    forward:63120, svi:{a:0.0020,b:0.30,rho:-0.30,m:0.00,sigma:0.012}, T:6.2/365, expiry:NOW+(6*24+5)*3600e3, live:false },
+  { id:'eth', oracleId:null, ticker:'ETH', name:'Ether', glyph:'Ξ', dec:0, tick:20,
+    forward:3412, svi:{a:0.0026,b:0.34,rho:-0.22,m:0.012,sigma:0.016}, T:2.0/365, expiry:NOW+48*3600e3, live:false },
+  { id:'sol', oracleId:null, ticker:'SOL', name:'Solana', glyph:'◎', dec:1, tick:1,
+    forward:146.2, svi:{a:0.0040,b:0.40,rho:-0.10,m:0.00,sigma:0.020}, T:0.75/365, expiry:NOW+18*3600e3, live:false },
+];
+
+let markets=FALLBACK.map(m=>({...m})), cur=markets[0], strikeScaled=0, dir='up', LIVE=false;
+const positions=[];
+const $=id=>document.getElementById(id);
+const els={};
+['clock','dataMode','dataChip','bGlyph','bAsset','bSub','bFwd','bExp','bIV','hAsset','hStrike','probBig','fairCents','rtCost',
+ 'curvePath','curveArea','markerLine','markerDot','markerHalo','xticks','curve','strike','strikeVal','ladMin','ladMax',
+ 'upAsk','upBid','dnAsk','dnBid','tileUp','tileDown','segUp','segDown','qty','qMinus','qPlus',
+ 'sPrice','sPayout','sProfit','sRoi','sCost','placeBtn','posList','pnlTot',
+ 'walletBtn','walletSub','execMode'].forEach(k=>els[k]=$(k));
+
+/* ── format ── */
+const px=(m,v)=>'$'+v.toLocaleString('en-US',{minimumFractionDigits:m.dec,maximumFractionDigits:m.dec});
+const money=(v,d=2)=>'$'+v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const cents=p=>(p*100).toFixed(1)+'¢';
+const snap=(m,v)=>Math.round(v/m.tick)*m.tick;
+const bounds=m=>({ lo:snap(m,m.forward*0.85), hi:snap(m,m.forward*1.16) });
+
+/* ── chart geometry ── */
+const PX_L=10, PX_R=990, PY_T=18, PY_B=300;
+const xAt=f=>PX_L+(PX_R-PX_L)*f;
+const yAt=p=>PY_T+(PY_B-PY_T)*(1-p);
+
+function buildCurve(){
+  const {lo,hi}=bounds(cur), N=96, pts=[];
+  for(let i=0;i<=N;i++){ const f=i/N, k=lo+(hi-lo)*f, p=digitalUp(cur.svi,cur.forward,k); pts.push([xAt(f),yAt(p)]); }
+  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(2)+' '+p[1].toFixed(2)).join(' ');
+  els.curvePath.setAttribute('d',d);
+  els.curveArea.setAttribute('d',d+` L${PX_R} ${PY_B} L${PX_L} ${PY_B} Z`);
+}
+function animateCurveIn(){
+  const len=els.curvePath.getTotalLength();
+  els.curvePath.style.transition='none';
+  els.curvePath.style.strokeDasharray=len; els.curvePath.style.strokeDashoffset=len;
+  els.curveArea.style.opacity='0';
+  requestAnimationFrame(()=>{ els.curvePath.style.transition='stroke-dashoffset 1.05s cubic-bezier(.3,.8,.3,1)';
+    els.curvePath.style.strokeDashoffset='0';
+    els.curveArea.style.transition='opacity .8s ease .25s'; els.curveArea.style.opacity='1'; });
+}
+function buildXTicks(){
+  const {lo,hi}=bounds(cur); let s='';
+  for(let i=0;i<=4;i++){ const f=i/4, x=xAt(f), k=snap(cur,lo+(hi-lo)*f);
+    const anc=i===0?'start':i===4?'end':'middle';
+    s+=`<text class="axis-x" x="${x.toFixed(1)}" y="318" text-anchor="${anc}">${px(cur,k)}</text>`; }
+  els.xticks.innerHTML=s;
+}
+function updateMarker(){
+  const {lo,hi}=bounds(cur), f=Math.min(1,Math.max(0,(strikeScaled-lo)/(hi-lo)));
+  const x=xAt(f), p=digitalUp(cur.svi,cur.forward,strikeScaled), y=yAt(p);
+  els.markerLine.setAttribute('x1',x); els.markerLine.setAttribute('x2',x);
+  els.markerDot.setAttribute('cx',x); els.markerDot.setAttribute('cy',y);
+  els.markerHalo.setAttribute('cx',x); els.markerHalo.setAttribute('cy',y);
+  els.markerDot.style.stroke=p>=.5?'var(--up)':'var(--down)';
+}
+
+/* ── animated hero number ── */
+const anim={prob:0,fair:0,tp:0,tf:0};
+function frame(){ anim.prob+=(anim.tp-anim.prob)*0.16; anim.fair+=(anim.tf-anim.fair)*0.16;
+  els.probBig.textContent=(anim.prob*100).toFixed(1); els.fairCents.textContent=cents(anim.fair);
+  requestAnimationFrame(frame); }
+
+function repriceBoard(){
+  const fair=digitalUp(cur.svi,cur.forward,strikeScaled), q=quote(fair);
+  anim.tp=fair; anim.tf=fair;
+  els.rtCost.textContent=cents(q.roundTrip);
+  els.hStrike.textContent=px(cur,strikeScaled);
+  els.strikeVal.textContent=px(cur,strikeScaled);
+  els.upAsk.innerHTML=(q.upAsk*100).toFixed(1)+'<em>¢</em>';
+  els.dnAsk.innerHTML=(q.dnAsk*100).toFixed(1)+'<em>¢</em>';
+  els.upBid.textContent=cents(q.upBid); els.dnBid.textContent=cents(q.dnBid);
+  els.bIV.textContent=(impliedVolAnnual(cur.svi,cur.forward,strikeScaled,cur.T)*100).toFixed(0)+'%';
+  updateMarker(); renderTicket(q);
+}
+function renderTicket(q){
+  q=q||quote(digitalUp(cur.svi,cur.forward,strikeScaled));
+  const ask=dir==='up'?q.upAsk:q.dnAsk;
+  const qty=Math.max(0,parseInt(els.qty.value||'0',10)||0);
+  const cost=ask*qty, payout=qty*1, profit=payout-cost, roi=cost>0?profit/cost:0;
+  els.sPrice.textContent=cents(ask);
+  els.sPayout.textContent=money(payout);
+  els.sProfit.textContent=money(profit); els.sProfit.className='v '+dir;
+  els.sRoi.textContent=(roi*100).toFixed(0)+'%';
+  els.sCost.textContent=money(cost);
+}
+
+/* ── positions ── */
+function renderPositions(){
+  if(!positions.length){ els.posList.innerHTML='<div class="empty">None yet. Choose a strike, take a side, open a paper position — it revalues live as the surface drifts.</div>';
+    els.pnlTot.textContent='$0.00'; els.pnlTot.style.color='var(--dim)'; return; }
+  let tot=0; els.posList.innerHTML='';
+  for(const p of positions){
+    const q=quote(digitalUp(p.m.svi,p.m.forward,p.strike));
+    const bid=p.dir==='up'?q.upBid:q.dnBid, mark=bid*p.qty, pnl=mark-p.cost; tot+=pnl;
+    const el=document.createElement('div'); el.className='pos';
+    el.innerHTML=`<div class="pl"><div class="pd ${p.dir}">${p.m.ticker} ${p.dir==='up'?'▲ Up':'▼ Down'} · ${p.qty}×${p.onchain?' · on-chain':''}</div>
+      <div class="ps">strike ${px(p.m,p.strike)}</div></div>
+      <div class="pr"><div class="ppl ${pnl>=0?'gain':'loss'}">${pnl>=0?'+':'−'}${money(Math.abs(pnl))}</div>
+      <div class="pc">cost ${money(p.cost)} · mark ${money(mark)}${p.digest?` · <a href="https://suiscan.xyz/testnet/tx/${p.digest}" target="_blank" rel="noopener">tx ↗</a>`:''}</div></div>`;
+    els.posList.appendChild(el);
+  }
+  els.pnlTot.textContent=(tot>=0?'+':'−')+money(Math.abs(tot));
+  els.pnlTot.style.color=tot>=0?'var(--up)':'var(--down)';
+}
+function openPosition(){
+  const q=quote(digitalUp(cur.svi,cur.forward,strikeScaled));
+  const ask=dir==='up'?q.upAsk:q.dnAsk, qty=Math.max(1,parseInt(els.qty.value||'0',10)||0);
+  positions.unshift({ m:cur, dir, strike:strikeScaled, qty, cost:ask*qty }); renderPositions();
+  els.placeBtn.animate([{transform:'scale(1)'},{transform:'scale(.975)'},{transform:'scale(1)'}],{duration:230,easing:'ease'});
+}
+
+/* ── market list ── */
+function renderMarketList(){
+  const host=$('marketList'); host.innerHTML='';
+  for(const m of markets){
+    const atm=snap(m,m.forward), p=digitalUp(m.svi,m.forward,atm);
+    const el=document.createElement('button'); el.className='market'+(m===cur?' active':''); el._market=m;
+    const title = LIVE ? `<span class="tk" data-exp>${fmtCountdown(m.expiry-Date.now())}</span>`
+                       : `<span class="tk">${m.ticker}</span>`;
+    const sub = LIVE ? `<span>${m.ticker} · <b data-fwd>${px(m,m.forward)}</b></span><span>over ${px(m,atm)}</span>`
+                     : `<span>fwd <b data-fwd>${px(m,m.forward)}</b></span><span data-exp>${fmtCountdown(m.expiry-Date.now())}</span>`;
+    el.innerHTML=`<div class="r1"><span class="nm"><span class="gl">${m.glyph}</span>${title}</span>
+      <span class="pb" style="color:${p>=.5?'var(--up)':'var(--down)'}">${(p*100).toFixed(0)}%</span></div>
+      <div class="r2">${sub}</div>`;
+    el.onclick=()=>selectMarket(m); host.appendChild(el);
+  }
+}
+function refreshListForwards(){
+  for(const c of $('marketList').children){ const m=c._market; if(!m) continue;
+    const atm=snap(m,m.forward), p=digitalUp(m.svi,m.forward,atm);
+    const fb=c.querySelector('[data-fwd]'); if(fb) fb.textContent=px(m,m.forward);
+    const pe=c.querySelector('.pb'); if(pe){ pe.textContent=(p*100).toFixed(0)+'%'; pe.style.color=p>=.5?'var(--up)':'var(--down)'; }
+  }
+}
+function selectMarket(m){
+  cur=m;
+  els.bGlyph.textContent=m.glyph; els.bAsset.firstChild.textContent=m.name;
+  els.bSub.textContent=m.live?`${m.ticker} · oracle ${m.oracleId.slice(0,10)}…`:`${m.ticker} market`; els.hAsset.textContent=m.ticker;
+  const {lo,hi}=bounds(m); els.strike.min=lo; els.strike.max=hi; els.strike.step=m.tick;
+  strikeScaled=snap(m,m.forward); els.strike.value=strikeScaled;
+  els.ladMin.textContent=px(m,lo); els.ladMax.textContent=px(m,hi);
+  els.bFwd.textContent=px(m,m.forward);
+  buildXTicks(); buildCurve(); animateCurveIn(); repriceBoard();
+  [...$('marketList').children].forEach(c=>c.classList.toggle('active',c._market===m));
+  refreshExec();
+}
+function setDir(d){
+  dir=d;
+  els.segUp.className=d==='up'?'on up':''; els.segDown.className=d==='down'?'on down':'';
+  els.tileUp.classList.toggle('sel',d==='up'); els.tileDown.classList.toggle('sel',d==='down');
+  els.placeBtn.className='place '+d; refreshExec();
+  renderTicket();
+}
+
+/* ── events ── */
+els.strike.addEventListener('input',e=>{ strikeScaled=snap(cur,Number(e.target.value)); repriceBoard(); });
+els.tileUp.onclick=()=>setDir('up'); els.tileDown.onclick=()=>setDir('down');
+els.segUp.onclick=()=>setDir('up'); els.segDown.onclick=()=>setDir('down');
+els.qPlus.onclick=()=>{ els.qty.value=(parseInt(els.qty.value||'0',10)||0)+5; renderTicket(); };
+els.qMinus.onclick=()=>{ els.qty.value=Math.max(1,(parseInt(els.qty.value||'0',10)||0)-5); renderTicket(); };
+els.qty.addEventListener('input',()=>{ els.qty.value=els.qty.value.replace(/[^0-9]/g,''); renderTicket(); });
+els.placeBtn.onclick=openPosition;
+
+function curveToStrike(evt){
+  const r=els.curve.getBoundingClientRect();
+  const f=Math.min(1,Math.max(0,(evt.clientX-r.left)/r.width));
+  const {lo,hi}=bounds(cur); strikeScaled=snap(cur,lo+(hi-lo)*f);
+  els.strike.value=strikeScaled; repriceBoard();
+}
+let dragging=false;
+els.curve.addEventListener('pointerdown',e=>{ dragging=true; els.curve.setPointerCapture(e.pointerId); curveToStrike(e); });
+els.curve.addEventListener('pointermove',e=>{ if(dragging) curveToStrike(e); });
+els.curve.addEventListener('pointerup',()=>dragging=false);
+window.addEventListener('keydown',e=>{
+  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight') return;
+  const {lo,hi}=bounds(cur); strikeScaled=Math.min(hi,Math.max(lo,strikeScaled+(e.key==='ArrowRight'?cur.tick:-cur.tick)));
+  els.strike.value=strikeScaled; repriceBoard(); e.preventDefault();
+});
+
+/* ── fallback drift (only when the live indexer is unreachable) ── */
+function gauss(){ let u=0,v=0; while(!u)u=Math.random(); while(!v)v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+setInterval(()=>{
+  if(LIVE) return;
+  for(const m of markets) m.forward=Math.max(m.forward*0.5, m.forward+gauss()*m.forward*0.0006);
+  refreshListForwards(); els.bFwd.textContent=px(cur,cur.forward); buildCurve(); repriceBoard(); renderPositions();
+}, 1600);
+
+/* ── clock + countdowns ── */
+function fmtCountdown(ms){ if(ms<=0) return 'settled';
+  const s=Math.floor(ms/1000), dd=Math.floor(s/86400), hh=Math.floor((s%86400)/3600), mm=Math.floor((s%3600)/60);
+  if(dd>0) return `${dd}d ${hh}h`; if(hh>0) return `${hh}h ${mm}m`; return `${mm}m ${s%60}s`; }
+function tick(){ const d=new Date();
+  els.clock.textContent=[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':');
+  els.bExp.textContent=fmtCountdown(cur.expiry-Date.now());
+  for(const c of $('marketList').children){ const e=c.querySelector('[data-exp]'); if(e) e.textContent=fmtCountdown(c._market.expiry-Date.now()); } }
+setInterval(tick,1000);
+
+/* ════════════════════════════════════════════════════════════════════
+   LIVE data — real BTC term structure from the DeepBook Predict indexer
+   ════════════════════════════════════════════════════════════════════ */
+const SERVER='https://predict-server.testnet.mystenlabs.com';
+/* Verified DeepBook Predict testnet deployment (from the SDK's constants.ts). */
+const CFG={
+  pkg:'0xf5ea2b3749c65d6e56507cc35388719aadb28f9cab873696a2f8687f5c785138',
+  predict:'0xc8736204d12f0a7277c86388a68bf8a194b0a14c5538ad13f22cbd8e2a38028a',
+  dusdc:'0xe95040085976bfd54a1a07225cd46c8a2b4e8e2b6732f140a0fc49850ba73e1a::dusdc::DUSDC',
+  clock:'0x6', rpc:'https://fullnode.testnet.sui.io:443',
+};
+const asArr=r=>Array.isArray(r)?r:(r&&(r.data||r.oracles))||[];
+const usdF=x=>{ const n=Number(x); return n>1e7?n/1e9:n; };
+async function fetchJSON(u){ const c=new AbortController(); const t=setTimeout(()=>c.abort(),7000);
+  try{ const r=await fetch(u,{signal:c.signal}); if(!r.ok) throw new Error(r.status); return await r.json(); }
+  finally{ clearTimeout(t); } }
+
+async function loadLive(){
+  try{
+    els.dataMode.textContent='connecting…';
+    const oracles=asArr(await fetchJSON(`${SERVER}/oracles`));
+    const act=oracles.filter(o=>o.status==='active' && (Number(o.expiry)-Date.now())>5*60000)
+                     .sort((a,b)=>Number(a.expiry)-Number(b.expiry));
+    if(!act.length) throw new Error('no active oracles');
+    // spread picks across the term structure (near-dated → far-dated)
+    const fracs=[0,0.12,0.25,0.4,0.58,0.78,1];
+    const chosen=[...new Set(fracs.map(f=>Math.round(f*(act.length-1))))].map(i=>act[i]);
+    const built=(await Promise.all(chosen.map(async o=>{
+      try{
+        const [pr,sv]=await Promise.all([
+          fetchJSON(`${SERVER}/oracles/${o.oracle_id}/prices/latest`),
+          fetchJSON(`${SERVER}/oracles/${o.oracle_id}/svi/latest`),
+        ]);
+        const fwd=usdF(pr.forward??pr.spot); if(!fwd||!isFinite(fwd)) return null;
+        const expiry=Number(o.expiry);
+        return { id:o.oracle_id, oracleId:o.oracle_id, ticker:(o.underlying_asset||'BTC').toUpperCase(),
+                 name:o.underlying_asset==='BTC'?'Bitcoin':o.underlying_asset, glyph:'₿', dec:0, tick:250,
+                 forward:fwd, svi:decodeSvi(sv), T:Math.max((expiry-Date.now())/MS_PER_YEAR,1/(365*24)),
+                 expiry, live:true };
+      }catch{ return null; }
+    }))).filter(Boolean);
+    if(!built.length) throw new Error('no priced markets');
+    markets=built; LIVE=true; cur=markets[0];
+    setDataMode(true); renderMarketList(); selectMarket(markets[0]); renderPositions();
+    pollLive();
+  }catch(e){ LIVE=false; setDataMode(false); console.warn('live load failed → seeded fallback:', e?.message||e); }
+}
+
+let pollN=0;
+function pollLive(){
+  setInterval(async ()=>{
+    pollN++;
+    await Promise.all(markets.map(async m=>{
+      try{
+        const pr=await fetchJSON(`${SERVER}/oracles/${m.oracleId}/prices/latest`);
+        const f=usdF(pr.forward??pr.spot); if(f&&isFinite(f)) m.forward=f;
+        if(pollN%3===0){ const sv=await fetchJSON(`${SERVER}/oracles/${m.oracleId}/svi/latest`); m.svi=decodeSvi(sv); }
+      }catch{}
+    }));
+    refreshListForwards();
+    if(cur){ els.bFwd.textContent=px(cur,cur.forward);
+      els.bIV.textContent=(impliedVolAnnual(cur.svi,cur.forward,strikeScaled,cur.T)*100).toFixed(0)+'%';
+      buildCurve(); repriceBoard(); }
+    renderPositions();
+  }, 5000);
+}
+function setDataMode(live){ els.dataMode.textContent=live?'live · on-chain surface':'seeded · offline';
+  els.dataChip.className='badge'+(live?'':' sim'); }
+
+/* ════════════════════════════════════════════════════════════════════
+   REAL on-chain trading — connect a Sui wallet, sign the openUp PTB.
+   Deps (@mysten/sui + wallet-standard) load lazily on first Connect, so the
+   live read-only app stays dependency-free and resilient if the CDN is down.
+   ════════════════════════════════════════════════════════════════════ */
+const wallet={ connected:false, address:null, wallet:null, account:null, client:null, managerId:null, coins:[], dusdc:null };
+let _sui=null;
+async function loadSui(){
+  if(_sui) return _sui;
+  const [tx,cl,ws]=await Promise.all([
+    import('https://esm.sh/@mysten/sui@2/transactions'),
+    import('https://esm.sh/@mysten/sui@2/client'),
+    import('https://esm.sh/@mysten/wallet-standard@0.16'),
+  ]);
+  _sui={ Transaction:tx.Transaction, SuiClient:cl.SuiClient, getWallets:ws.getWallets };
+  return _sui;
+}
+
+/* toast */
+let _toastT=null;
+function toast(msg,type='info',digest){
+  const t=$('toast'); t.className='toast show '+type;
+  t.innerHTML=`<span>${msg}</span>`+(digest?` <a href="https://suiscan.xyz/testnet/tx/${digest}" target="_blank" rel="noopener">view ↗</a>`:'');
+  clearTimeout(_toastT);
+  if(type!=='pending') _toastT=setTimeout(()=>{ t.className='toast'; }, digest?10000:4500);
+}
+
+function refreshExec(){
+  const live=wallet.connected && cur && cur.live;
+  els.placeBtn.textContent=(live?'Sign & Mint ':'Open ')+(dir==='up'?'Up':'Down')+(live?'':' Position');
+  els.execMode.textContent=live?'● Live · signs on Sui testnet':'Paper trade · connect wallet to mint';
+  els.execMode.className='exec-mode '+(live?'live':'paper');
+}
+function renderWallet(){
+  if(wallet.connected){
+    els.walletBtn.textContent=wallet.address.slice(0,6)+'…'+wallet.address.slice(-4);
+    els.walletBtn.title=wallet.address; els.walletBtn.classList.add('on');
+    els.walletSub.textContent=`${wallet.dusdc!=null?wallet.dusdc.toFixed(2):'…'} DUSDC · manager ${wallet.managerId?'✓':'—'}`;
+  } else { els.walletBtn.textContent='Connect Wallet'; els.walletBtn.classList.remove('on'); els.walletSub.textContent=''; }
+  refreshExec();
+}
+
+async function connectWallet(){
+  if(wallet.connected){ window.open('https://suiscan.xyz/testnet/account/'+wallet.address,'_blank'); return; }
+  try{
+    toast('Opening wallet…','pending');
+    const { getWallets, SuiClient }=await loadSui();
+    const found=getWallets().get().filter(w=>w.features['standard:connect'] && w.features['sui:signAndExecuteTransaction']);
+    if(!found.length){ toast('No Sui wallet detected — install Slush / Sui Wallet and reload','error'); return; }
+    const w=found[0];
+    await w.features['standard:connect'].connect();
+    const acct=(w.accounts||[]).find(a=>(a.chains||[]).some(c=>String(c).startsWith('sui:'))) || w.accounts[0];
+    if(!acct){ toast('Wallet returned no account','error'); return; }
+    wallet.wallet=w; wallet.account=acct; wallet.address=acct.address; wallet.connected=true;
+    wallet.client=new SuiClient({ url:CFG.rpc });
+    renderWallet(); toast('Wallet connected ✓','success');
+    refreshAccount();
+  }catch(e){ toast('Connect failed: '+(e?.message||e),'error'); console.error(e); }
+}
+
+async function refreshAccount(){
+  try{
+    const coins=await wallet.client.getCoins({ owner:wallet.address, coinType:CFG.dusdc, limit:50 });
+    wallet.coins=coins.data||[];
+    wallet.dusdc=wallet.coins.reduce((s,c)=>s+Number(c.balance),0)/1e6;
+  }catch(e){ console.warn('coins',e); }
+  try{ const ms=asArr(await fetchJSON(`${SERVER}/managers?owner=${wallet.address}`)); if(ms.length) wallet.managerId=ms[0].manager_id; }catch{}
+  renderWallet();
+}
+
+async function signExec(tx){
+  tx.setSenderIfNotSet ? tx.setSenderIfNotSet(wallet.address) : tx.setSender(wallet.address);
+  const f=wallet.wallet.features['sui:signAndExecuteTransaction'];
+  return await f.signAndExecuteTransaction({ transaction:tx, account:wallet.account, chain:'sui:testnet' });
+}
+
+async function ensureManager(){
+  if(wallet.managerId) return wallet.managerId;
+  toast('Creating your PredictManager (one-time)…','pending');
+  const { Transaction }=await loadSui();
+  const tx=new Transaction();
+  tx.moveCall({ target:`${CFG.pkg}::predict::create_manager`, arguments:[] });
+  const res=await signExec(tx);
+  await wallet.client.waitForTransaction({ digest:res.digest });
+  const tb=await wallet.client.getTransactionBlock({ digest:res.digest, options:{ showObjectChanges:true } });
+  const made=(tb.objectChanges||[]).find(c=>c.type==='created' && String(c.objectType).includes('::predict_manager::PredictManager'));
+  if(!made) throw new Error('PredictManager not found in tx');
+  wallet.managerId=made.objectId; renderWallet();
+  return wallet.managerId;
+}
+
+async function realMint(){
+  if(!wallet.connected) return connectWallet();
+  if(!cur.live){ toast('Real mint needs a live market','error'); return; }
+  try{
+    const q=quote(digitalUp(cur.svi,cur.forward,strikeScaled));
+    const ask=dir==='up'?q.upAsk:q.dnAsk;
+    const qtyN=Math.max(1,parseInt(els.qty.value||'0',10)||0);
+    if(!wallet.coins.length) await refreshAccount();
+    if(!wallet.coins.length){ toast('No DUSDC — get test funds from the faucet','error',null); window.open('https://tally.so/r/Xx102L','_blank'); return; }
+    const coin=wallet.coins.slice().sort((a,b)=>Number(b.balance)-Number(a.balance))[0];
+    const need=BigInt(Math.ceil(ask*qtyN*1.05*1e6));               // µDUSDC, 5% over the ask
+    if(BigInt(coin.balance)<need){ toast('Largest DUSDC coin can’t cover the cost','error'); return; }
+    const manager=await ensureManager();
+
+    const { Transaction }=await loadSui();
+    const strikeBig=BigInt(Math.round(strikeScaled*1e9));          // usdToScaled
+    const tx=new Transaction();
+    const chip=tx.splitCoins(tx.object(coin.coinObjectId), [tx.pure.u64(need)])[0];
+    tx.moveCall({ target:`${CFG.pkg}::predict_manager::deposit`, typeArguments:[CFG.dusdc], arguments:[tx.object(manager), chip] });
+    const key=tx.moveCall({ target:`${CFG.pkg}::market_key::${dir==='up'?'up':'down'}`,
+      arguments:[tx.pure.id(cur.oracleId), tx.pure.u64(BigInt(cur.expiry)), tx.pure.u64(strikeBig)] });
+    tx.moveCall({ target:`${CFG.pkg}::predict::mint`, typeArguments:[CFG.dusdc],
+      arguments:[tx.object(CFG.predict), tx.object(manager), tx.object(cur.oracleId), key, tx.pure.u64(BigInt(qtyN)*1000000n), tx.object(CFG.clock)] });
+
+    toast('Approve in your wallet…','pending');
+    const res=await signExec(tx);
+    toast('Confirming on-chain…','pending');
+    await wallet.client.waitForTransaction({ digest:res.digest });
+    positions.unshift({ m:cur, dir, strike:strikeScaled, qty:qtyN, cost:ask*qtyN, digest:res.digest, onchain:true });
+    renderPositions();
+    toast(`Minted ${dir.toUpperCase()} ${qtyN}× on-chain ✓`,'success',res.digest);
+    refreshAccount();
+  }catch(e){ toast('Mint failed: '+(e?.message||e),'error'); console.error(e); }
+}
+
+els.walletBtn.onclick=connectWallet;
+els.placeBtn.onclick=()=>(wallet.connected && cur.live) ? realMint() : openPosition();
+
+/* ── boot ── */
+renderMarketList(); selectMarket(markets[0]); setDir('up');
+requestAnimationFrame(frame); tick(); setDataMode(false); loadLive();
+</script>
+</body>
+</html>
