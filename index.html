@@ -872,8 +872,14 @@ async function realMint(){
     if(!wallet.coins.length) await refreshAccount();
     if(!wallet.coins.length){ toast('No DUSDC — get test funds from the faucet','error',null); window.open('https://tally.so/r/Xx102L','_blank'); return; }
     const coin=wallet.coins.slice().sort((a,b)=>Number(b.balance)-Number(a.balance))[0];
-    const need=BigInt(Math.ceil(ask*qtyN*1.05*1e6));               // µDUSDC, 5% over the ask
-    if(BigInt(coin.balance)<need){ toast('Largest DUSDC coin can’t cover the cost','error'); return; }
+    const bal=BigInt(coin.balance);
+    const estCost=BigInt(Math.ceil(ask*qtyN*1e6));                 // off-chain estimate (affordability check)
+    if(bal<estCost){ toast(`Not enough DUSDC — need ≈ ${money(ask*qtyN)}, have ${money(Number(bal)/1e6)} in one coin`,'error',null); window.open('https://tally.so/r/Xx102L','_blank'); return; }
+    // Deposit up to the position's MAX PAYOUT ($1/contract). A binary contract's cost is
+    // always < its max payout, so this guarantees the manager can cover the mint
+    // (avoids EBalanceManagerBalanceTooLow / abort 3); any surplus stays in the manager.
+    const maxPayout=BigInt(qtyN)*1_000_000n;
+    const need = bal<maxPayout ? bal : maxPayout;
     const manager=await ensureManager();
 
     const { Transaction }=await loadSui();
