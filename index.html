@@ -209,12 +209,22 @@
   @keyframes rv{ to{opacity:1; transform:none} }
 
   /* ── wallet + execution ── */
-  .wallet-row{ display:flex; align-items:center; gap:9px; justify-content:flex-end; margin-top:5px; }
+  .wallet-row{ display:flex; align-items:center; gap:9px; justify-content:flex-end; margin-top:5px; position:relative; }
   .wbtn{ font:inherit; font-size:11px; letter-spacing:.06em; color:var(--ink); background:transparent; border:1px solid var(--rule-strong); padding:6px 13px; cursor:pointer; transition:.2s; }
   .wbtn:hover{ background:var(--ink); color:var(--paper); }
   .wbtn.on{ border-color:var(--up); color:var(--up); }
   .wbtn.on:hover{ background:var(--up); color:var(--paper); }
+  .wbtn:disabled{ opacity:.55; cursor:wait; }
   .wsub{ font-size:10.5px; color:var(--dim); }
+  .wallet-pop{ position:absolute; top:calc(100% + 9px); right:0; min-width:216px; background:var(--paper); border:1px solid var(--rule-strong);
+    box-shadow:0 18px 46px rgba(0,0,0,.22); z-index:60; padding:6px; text-align:left; }
+  .wallet-pop[hidden]{ display:none; }
+  .wm-h{ font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); padding:9px 9px 8px; border-bottom:1px solid var(--rule-soft); margin-bottom:4px; }
+  .wm-item{ display:flex; align-items:center; gap:10px; width:100%; text-align:left; font:inherit; font-size:12.5px; color:var(--ink);
+    background:transparent; border:none; padding:10px 9px; cursor:pointer; transition:.15s; }
+  .wm-item:hover{ background:rgba(27,24,18,.06); }
+  .wm-item img{ width:19px; height:19px; border-radius:5px; object-fit:cover; }
+  .wm-dot{ width:8px; height:8px; border-radius:50%; background:var(--up); }
   .exec-mode{ font-size:10px; letter-spacing:.16em; text-transform:uppercase; margin-top:11px; text-align:center; }
   .exec-mode.paper{ color:var(--faint); }
   .exec-mode.live{ color:var(--up); }
@@ -253,6 +263,7 @@
         <div class="wallet-row">
           <button class="wbtn" id="walletBtn">Connect Wallet</button>
           <span class="wsub" id="walletSub"></span>
+          <div class="wallet-pop" id="walletMenu" hidden></div>
         </div>
       </div>
     </div>
@@ -695,14 +706,30 @@ const wallet={ connected:false, address:null, wallet:null, account:null, client:
 let _sui=null;
 async function loadSui(){
   if(_sui) return _sui;
+  // Pinned + version-aligned: wallet-standard@0.21 peers on @mysten/sui@^2.20,
+  // so esm.sh resolves a SINGLE @mysten/sui copy (no v1/v2 split).
   const [tx,cl,ws]=await Promise.all([
-    import('https://esm.sh/@mysten/sui@2/transactions'),
-    import('https://esm.sh/@mysten/sui@2/client'),
-    import('https://esm.sh/@mysten/wallet-standard@0.16'),
+    import('https://esm.sh/@mysten/sui@2.20.0/transactions'),
+    import('https://esm.sh/@mysten/sui@2.20.0/client'),
+    import('https://esm.sh/@mysten/wallet-standard@0.21.2'),
   ]);
   _sui={ Transaction:tx.Transaction, SuiClient:cl.SuiClient, getWallets:ws.getWallets };
   return _sui;
 }
+
+/* Wallet registry — initialized early and kept fresh via register/unregister
+   events, so extensions are detected reliably regardless of load order. */
+let availableWallets=[], _regReady=null;
+const isSuiWallet=w=>!!(w.features?.['standard:connect']) &&
+  ((w.chains||[]).some(c=>String(c).startsWith('sui:')) ||
+   !!w.features?.['sui:signAndExecuteTransaction'] || !!w.features?.['sui:signTransaction']);
+async function initRegistry(){
+  const { getWallets }=await loadSui();
+  const reg=getWallets();
+  const refresh=()=>{ availableWallets=reg.get().filter(isSuiWallet); renderWallet(); };
+  refresh(); reg.on('register', refresh); reg.on('unregister', refresh);
+}
+function ensureRegistry(){ return _regReady || (_regReady=initRegistry().catch(e=>{ _regReady=null; throw e; })); }
 
 /* toast */
 let _toastT=null;
@@ -729,22 +756,68 @@ function renderWallet(){
 }
 
 async function connectWallet(){
-  if(wallet.connected){ window.open('https://suiscan.xyz/testnet/account/'+wallet.address,'_blank'); return; }
+  if(wallet.connected){ toggleWalletMenu(); return; }
+  els.walletBtn.disabled=true; els.walletBtn.textContent='Detecting…';
   try{
-    toast('Opening wallet…','pending');
-    const { getWallets, SuiClient }=await loadSui();
-    const found=getWallets().get().filter(w=>w.features['standard:connect'] && w.features['sui:signAndExecuteTransaction']);
-    if(!found.length){ toast('No Sui wallet detected — install Slush / Sui Wallet and reload','error'); return; }
-    const w=found[0];
+    await ensureRegistry();
+    if(!availableWallets.length){
+      toast('No Sui wallet detected. Install Slush or Suiet, set it to testnet, then reload.','error');
+      window.open('https://slush.app/','_blank'); return;
+    }
+    if(availableWallets.length===1) await doConnect(availableWallets[0]);
+    else showWalletPicker();
+  }catch(e){ toast('Wallet libraries failed to load (network/CDN blocked): '+(e?.message||e),'error'); console.error(e); }
+  finally{ els.walletBtn.disabled=false; renderWallet(); }
+}
+async function doConnect(w){
+  hideWalletMenu();
+  try{
+    toast(`Connecting ${w.name}…`,'pending');
+    const { SuiClient }=await loadSui();
     await w.features['standard:connect'].connect();
-    const acct=(w.accounts||[]).find(a=>(a.chains||[]).some(c=>String(c).startsWith('sui:'))) || w.accounts[0];
-    if(!acct){ toast('Wallet returned no account','error'); return; }
+    const acct=(w.accounts||[]).find(a=>(a.chains||[]).some(c=>String(c).startsWith('sui:'))) || (w.accounts||[])[0];
+    if(!acct) throw new Error('wallet authorized no account');
     wallet.wallet=w; wallet.account=acct; wallet.address=acct.address; wallet.connected=true;
     wallet.client=new SuiClient({ url:CFG.rpc });
-    renderWallet(); toast('Wallet connected ✓','success');
-    refreshAccount();
+    if(w.features['standard:events']){
+      try{ wallet._off=w.features['standard:events'].on('change', ()=>{
+        const a=(w.accounts||[])[0];
+        if(!a) disconnectWallet();
+        else { wallet.account=a; wallet.address=a.address; renderWallet(); refreshAccount(); }
+      }); }catch{}
+    }
+    renderWallet(); toast(`${w.name} connected ✓`,'success'); refreshAccount();
   }catch(e){ toast('Connect failed: '+(e?.message||e),'error'); console.error(e); }
 }
+async function disconnectWallet(){
+  hideWalletMenu();
+  try{ await wallet.wallet?.features?.['standard:disconnect']?.disconnect(); }catch{}
+  try{ wallet._off && wallet._off(); }catch{}
+  Object.assign(wallet,{ connected:false, address:null, wallet:null, account:null, managerId:null, coins:[], dusdc:null, _off:null });
+  renderWallet(); toast('Wallet disconnected');
+}
+
+/* popover: a wallet picker when disconnected, an account menu when connected */
+function hideWalletMenu(){ const m=$('walletMenu'); if(m) m.hidden=true; }
+function showWalletPicker(){
+  const m=$('walletMenu');
+  m.innerHTML='<div class="wm-h">Choose a wallet</div>'+availableWallets.map((w,i)=>
+    `<button class="wm-item" data-i="${i}">${w.icon?`<img src="${w.icon}" alt="">`:'<span class="wm-dot"></span>'}<span>${w.name}</span></button>`).join('');
+  m.querySelectorAll('.wm-item').forEach(b=>b.onclick=()=>doConnect(availableWallets[+b.dataset.i]));
+  m.hidden=false;
+}
+function toggleWalletMenu(){
+  const m=$('walletMenu'); if(!m.hidden){ m.hidden=true; return; }
+  const a=wallet.address;
+  m.innerHTML=`<div class="wm-h">${a.slice(0,10)}…${a.slice(-6)}</div>
+    <button class="wm-item" data-act="scan"><span>View on Suiscan ↗</span></button>
+    <button class="wm-item" data-act="disc"><span>Disconnect</span></button>`;
+  m.querySelector('[data-act=scan]').onclick=()=>{ window.open('https://suiscan.xyz/testnet/account/'+a,'_blank'); hideWalletMenu(); };
+  m.querySelector('[data-act=disc]').onclick=disconnectWallet;
+  m.hidden=false;
+}
+document.addEventListener('click',e=>{ const m=$('walletMenu');
+  if(m && !m.hidden && !m.contains(e.target) && e.target!==els.walletBtn) m.hidden=true; });
 
 async function refreshAccount(){
   try{
@@ -757,9 +830,16 @@ async function refreshAccount(){
 }
 
 async function signExec(tx){
-  tx.setSenderIfNotSet ? tx.setSenderIfNotSet(wallet.address) : tx.setSender(wallet.address);
-  const f=wallet.wallet.features['sui:signAndExecuteTransaction'];
-  return await f.signAndExecuteTransaction({ transaction:tx, account:wallet.account, chain:'sui:testnet' });
+  if(tx.setSenderIfNotSet) tx.setSenderIfNotSet(wallet.address); else tx.setSender(wallet.address);
+  const f=wallet.wallet.features, chain='sui:testnet';
+  if(f['sui:signAndExecuteTransaction'])
+    return await f['sui:signAndExecuteTransaction'].signAndExecuteTransaction({ transaction:tx, account:wallet.account, chain });
+  if(f['sui:signTransaction']){                          // sign in wallet, broadcast via our client
+    const s=await f['sui:signTransaction'].signTransaction({ transaction:tx, account:wallet.account, chain });
+    const bytes=s.bytes ?? s.transactionBytes;
+    return await wallet.client.executeTransactionBlock({ transactionBlock:bytes, signature:s.signature, options:{ showEffects:true } });
+  }
+  throw new Error('this wallet cannot sign transactions');
 }
 
 async function ensureManager(){
@@ -818,6 +898,8 @@ els.placeBtn.onclick=()=>(wallet.connected && cur.live) ? realMint() : openPosit
 /* ── boot ── */
 renderMarketList(); selectMarket(markets[0]); setDir('up');
 requestAnimationFrame(frame); tick(); setDataMode(false); loadLive();
+/* warm wallet detection shortly after first paint (non-blocking) */
+setTimeout(()=>{ ensureRegistry().catch(()=>{}); }, 900);
 </script>
 </body>
 </html>
