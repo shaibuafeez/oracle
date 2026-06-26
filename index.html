@@ -225,6 +225,11 @@
   .wm-item:hover{ background:rgba(27,24,18,.06); }
   .wm-item img{ width:19px; height:19px; border-radius:5px; object-fit:cover; }
   .wm-dot{ width:8px; height:8px; border-radius:50%; background:var(--up); }
+  .ml-msg{ font-size:12px; color:var(--dim); line-height:1.7; padding:14px 4px; display:flex; flex-direction:column; gap:10px; align-items:flex-start; }
+  .ml-spin{ display:inline-block; width:11px; height:11px; border:1.5px solid var(--rule); border-top-color:var(--down); border-radius:50%; margin-right:8px; vertical-align:-1px; animation:spin .8s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .ml-retry{ font:inherit; font-size:11px; letter-spacing:.08em; color:var(--ink); background:transparent; border:1px solid var(--rule-strong); padding:7px 14px; cursor:pointer; transition:.2s; }
+  .ml-retry:hover{ background:var(--ink); color:var(--paper); }
   .exec-mode{ font-size:10px; letter-spacing:.16em; text-transform:uppercase; margin-top:11px; text-align:center; }
   .exec-mode.paper{ color:var(--faint); }
   .exec-mode.live{ color:var(--up); }
@@ -258,7 +263,7 @@
     <div class="nameplate">
       <div class="title"><span class="kanji">予測</span><span class="en">Oracle<i>.</i></span></div>
       <div class="edition">
-        <div><span class="badge sim" id="dataChip"><span class="dot"></span><b id="dataMode">seeded surface</b></span></div>
+        <div><span class="badge sim" id="dataChip"><span class="dot"></span><b id="dataMode">connecting…</b></span></div>
         <div>Testnet Edition · No. <b>4·16</b> · settles in <b>DUSDC</b></div>
         <div class="wallet-row">
           <button class="wbtn" id="walletBtn">Connect Wallet</button>
@@ -293,7 +298,7 @@
 
       <div class="hero">
         <div class="q">Probability that <b id="hAsset">BTC</b> settles above <b id="hStrike">$0</b></div>
-        <div class="prob"><span id="probBig">0.0</span><i>%</i></div>
+        <div class="prob"><span id="probBig">—</span><i>%</i></div>
         <div class="sub">
           <span>fair value <b id="fairCents">0.0¢</b></span>
           <span>round-trip cost <b id="rtCost">0.0¢</b></span>
@@ -381,12 +386,12 @@
       </div>
 
       <button class="place up" id="placeBtn">Open Up Position</button>
-      <div class="exec-mode paper" id="execMode">Paper trade · connect wallet to mint</div>
-      <div class="note">Priced by the live <b>DeepBook Predict</b> engine — SVI surface → Black–Scholes <b>N(d₂)</b> → Bernoulli spread. Connect a Sui wallet to sign a real <b>openUp</b> mint on testnet (deposit → market_key → mint); otherwise it paper-trades against the live bid.</div>
+      <div class="exec-mode paper" id="execMode">Connect a Sui wallet to open a position</div>
+      <div class="note">Priced by the live <b>DeepBook Predict</b> engine — SVI surface → Black–Scholes <b>N(d₂)</b> → Bernoulli spread, from the on-chain surface. Connect a Sui wallet to sign a real <b>openUp</b> mint on testnet (deposit → market_key → mint); the cost shown after minting is read back from the <b>PositionMinted</b> event.</div>
 
       <div class="ledger">
         <div class="lh"><span class="pl">Open Positions</span><span class="pt" id="pnlTot">$0.00</span></div>
-        <div id="posList"><div class="empty">None yet. Choose a strike, take a side, open a paper position — it revalues live as the surface drifts.</div></div>
+        <div id="posList"><div class="empty">No open positions. Connect a Sui wallet, pick a strike and a side, and sign a real on-chain mint — it appears here with its tx, marked live against the surface.</div></div>
       </div>
     </aside>
   </div>
@@ -420,20 +425,11 @@ const decodeSvi=r=>{ const n=x=>Number(x)/1e9; return { a:n(r.a), b:n(r.b),
   rho:(r.rho_negative?-1:1)*n(r.rho), m:(r.m_negative?-1:1)*n(r.m), sigma:n(r.sigma) }; };
 
 /* ── markets ──
-   LIVE by default: a BTC term structure pulled straight from the real DeepBook
-   Predict testnet indexer (real forwards + real on-chain SVI surfaces, polled).
-   The seeded surfaces below are ONLY an offline fallback if the indexer is unreachable. */
-const NOW=Date.now();
-const FALLBACK=[
-  { id:'btc', oracleId:null, ticker:'BTC', name:'Bitcoin', glyph:'₿', dec:0, tick:250,
-    forward:63120, svi:{a:0.0020,b:0.30,rho:-0.30,m:0.00,sigma:0.012}, T:6.2/365, expiry:NOW+(6*24+5)*3600e3, live:false },
-  { id:'eth', oracleId:null, ticker:'ETH', name:'Ether', glyph:'Ξ', dec:0, tick:20,
-    forward:3412, svi:{a:0.0026,b:0.34,rho:-0.22,m:0.012,sigma:0.016}, T:2.0/365, expiry:NOW+48*3600e3, live:false },
-  { id:'sol', oracleId:null, ticker:'SOL', name:'Solana', glyph:'◎', dec:1, tick:1,
-    forward:146.2, svi:{a:0.0040,b:0.40,rho:-0.10,m:0.00,sigma:0.020}, T:0.75/365, expiry:NOW+18*3600e3, live:false },
-];
-
-let markets=FALLBACK.map(m=>({...m})), cur=markets[0], strikeScaled=0, dir='up', LIVE=false;
+   LIVE ONLY — a BTC term structure pulled straight from the real DeepBook Predict
+   testnet indexer (real forwards + real on-chain SVI surfaces, polled). There is no
+   seeded data: if the indexer is unreachable the board shows an error + retry, never
+   fabricated prices. */
+let markets=[], cur=null, strikeScaled=0, dir='up', LIVE=false, ready=false, loadState='loading';
 const positions=[];
 const $=id=>document.getElementById(id);
 const els={};
@@ -489,11 +485,12 @@ function updateMarker(){
 
 /* ── animated hero number ── */
 const anim={prob:0,fair:0,tp:0,tf:0};
-function frame(){ anim.prob+=(anim.tp-anim.prob)*0.16; anim.fair+=(anim.tf-anim.fair)*0.16;
-  els.probBig.textContent=(anim.prob*100).toFixed(1); els.fairCents.textContent=cents(anim.fair);
+function frame(){ if(ready){ anim.prob+=(anim.tp-anim.prob)*0.16; anim.fair+=(anim.tf-anim.fair)*0.16;
+  els.probBig.textContent=(anim.prob*100).toFixed(1); els.fairCents.textContent=cents(anim.fair); }
   requestAnimationFrame(frame); }
 
 function repriceBoard(){
+  if(!cur) return;
   const fair=digitalUp(cur.svi,cur.forward,strikeScaled), q=quote(fair);
   anim.tp=fair; anim.tf=fair;
   els.rtCost.textContent=cents(q.roundTrip);
@@ -506,6 +503,7 @@ function repriceBoard(){
   updateMarker(); renderTicket(q);
 }
 function renderTicket(q){
+  if(!cur) return;
   q=q||quote(digitalUp(cur.svi,cur.forward,strikeScaled));
   const ask=dir==='up'?q.upAsk:q.dnAsk;
   const qty=Math.max(0,parseInt(els.qty.value||'0',10)||0);
@@ -519,7 +517,7 @@ function renderTicket(q){
 
 /* ── positions ── */
 function renderPositions(){
-  if(!positions.length){ els.posList.innerHTML='<div class="empty">None yet. Choose a strike, take a side, open a paper position — it revalues live as the surface drifts.</div>';
+  if(!positions.length){ els.posList.innerHTML='<div class="empty">No open positions. Connect a Sui wallet, pick a strike and a side, and sign a real on-chain mint — it appears here with its tx, marked live against the surface.</div>';
     els.pnlTot.textContent='$0.00'; els.pnlTot.style.color='var(--dim)'; return; }
   let tot=0; els.posList.innerHTML='';
   for(const p of positions){
@@ -535,26 +533,24 @@ function renderPositions(){
   els.pnlTot.textContent=(tot>=0?'+':'−')+money(Math.abs(tot));
   els.pnlTot.style.color=tot>=0?'var(--up)':'var(--down)';
 }
-function openPosition(){
-  const q=quote(digitalUp(cur.svi,cur.forward,strikeScaled));
-  const ask=dir==='up'?q.upAsk:q.dnAsk, qty=Math.max(1,parseInt(els.qty.value||'0',10)||0);
-  positions.unshift({ m:cur, dir, strike:strikeScaled, qty, cost:ask*qty }); renderPositions();
-  els.placeBtn.animate([{transform:'scale(1)'},{transform:'scale(.975)'},{transform:'scale(1)'}],{duration:230,easing:'ease'});
-}
-
 /* ── market list ── */
 function renderMarketList(){
   const host=$('marketList'); host.innerHTML='';
+  if(!markets.length){
+    if(loadState==='error'){
+      host.innerHTML=`<div class="ml-msg">Couldn’t reach the DeepBook&nbsp;Predict indexer.<br><button class="ml-retry" id="mlRetry">Retry</button></div>`;
+      const r=$('mlRetry'); if(r) r.onclick=()=>{ loadState='loading'; renderMarketList(); loadLive(); };
+    } else {
+      host.innerHTML=`<div class="ml-msg"><span class="ml-spin"></span>Loading live markets…</div>`;
+    }
+    return;
+  }
   for(const m of markets){
     const atm=snap(m,m.forward), p=digitalUp(m.svi,m.forward,atm);
     const el=document.createElement('button'); el.className='market'+(m===cur?' active':''); el._market=m;
-    const title = LIVE ? `<span class="tk" data-exp>${fmtCountdown(m.expiry-Date.now())}</span>`
-                       : `<span class="tk">${m.ticker}</span>`;
-    const sub = LIVE ? `<span>${m.ticker} · <b data-fwd>${px(m,m.forward)}</b></span><span>over ${px(m,atm)}</span>`
-                     : `<span>fwd <b data-fwd>${px(m,m.forward)}</b></span><span data-exp>${fmtCountdown(m.expiry-Date.now())}</span>`;
-    el.innerHTML=`<div class="r1"><span class="nm"><span class="gl">${m.glyph}</span>${title}</span>
+    el.innerHTML=`<div class="r1"><span class="nm"><span class="gl">${m.glyph}</span><span class="tk" data-exp>${fmtCountdown(m.expiry-Date.now())}</span></span>
       <span class="pb" style="color:${p>=.5?'var(--up)':'var(--down)'}">${(p*100).toFixed(0)}%</span></div>
-      <div class="r2">${sub}</div>`;
+      <div class="r2"><span>${m.ticker} · <b data-fwd>${px(m,m.forward)}</b></span><span>over ${px(m,atm)}</span></div>`;
     el.onclick=()=>selectMarket(m); host.appendChild(el);
   }
 }
@@ -592,8 +588,6 @@ els.segUp.onclick=()=>setDir('up'); els.segDown.onclick=()=>setDir('down');
 els.qPlus.onclick=()=>{ els.qty.value=(parseInt(els.qty.value||'0',10)||0)+5; renderTicket(); };
 els.qMinus.onclick=()=>{ els.qty.value=Math.max(1,(parseInt(els.qty.value||'0',10)||0)-5); renderTicket(); };
 els.qty.addEventListener('input',()=>{ els.qty.value=els.qty.value.replace(/[^0-9]/g,''); renderTicket(); });
-els.placeBtn.onclick=openPosition;
-
 function curveToStrike(evt){
   const r=els.curve.getBoundingClientRect();
   const f=Math.min(1,Math.max(0,(evt.clientX-r.left)/r.width));
@@ -610,22 +604,14 @@ window.addEventListener('keydown',e=>{
   els.strike.value=strikeScaled; repriceBoard(); e.preventDefault();
 });
 
-/* ── fallback drift (only when the live indexer is unreachable) ── */
-function gauss(){ let u=0,v=0; while(!u)u=Math.random(); while(!v)v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
-setInterval(()=>{
-  if(LIVE) return;
-  for(const m of markets) m.forward=Math.max(m.forward*0.5, m.forward+gauss()*m.forward*0.0006);
-  refreshListForwards(); els.bFwd.textContent=px(cur,cur.forward); buildCurve(); repriceBoard(); renderPositions();
-}, 1600);
-
 /* ── clock + countdowns ── */
 function fmtCountdown(ms){ if(ms<=0) return 'settled';
   const s=Math.floor(ms/1000), dd=Math.floor(s/86400), hh=Math.floor((s%86400)/3600), mm=Math.floor((s%3600)/60);
   if(dd>0) return `${dd}d ${hh}h`; if(hh>0) return `${hh}h ${mm}m`; return `${mm}m ${s%60}s`; }
 function tick(){ const d=new Date();
   els.clock.textContent=[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':');
-  els.bExp.textContent=fmtCountdown(cur.expiry-Date.now());
-  for(const c of $('marketList').children){ const e=c.querySelector('[data-exp]'); if(e) e.textContent=fmtCountdown(c._market.expiry-Date.now()); } }
+  if(cur) els.bExp.textContent=fmtCountdown(cur.expiry-Date.now());
+  for(const c of $('marketList').children){ const e=c.querySelector('[data-exp]'); if(e&&c._market) e.textContent=fmtCountdown(c._market.expiry-Date.now()); } }
 setInterval(tick,1000);
 
 /* ════════════════════════════════════════════════════════════════════
@@ -670,10 +656,11 @@ async function loadLive(){
       }catch{ return null; }
     }))).filter(Boolean);
     if(!built.length) throw new Error('no priced markets');
-    markets=built; LIVE=true; cur=markets[0];
+    markets=built; LIVE=true; ready=true; loadState='ok';
     setDataMode(true); renderMarketList(); selectMarket(markets[0]); renderPositions();
     pollLive();
-  }catch(e){ LIVE=false; setDataMode(false); console.warn('live load failed → seeded fallback:', e?.message||e); }
+  }catch(e){ LIVE=false; ready=false; loadState='error'; markets=[]; cur=null;
+    renderMarketList(); setDataMode(false); refreshExec(); console.warn('live load failed:', e?.message||e); }
 }
 
 let pollN=0;
@@ -694,7 +681,7 @@ function pollLive(){
     renderPositions();
   }, 5000);
 }
-function setDataMode(live){ els.dataMode.textContent=live?'live · on-chain surface':'seeded · offline';
+function setDataMode(live){ els.dataMode.textContent=live?'live · on-chain surface':'indexer unreachable';
   els.dataChip.className='badge'+(live?'':' sim'); }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -741,10 +728,10 @@ function toast(msg,type='info',digest){
 }
 
 function refreshExec(){
-  const live=wallet.connected && cur && cur.live;
-  els.placeBtn.textContent=(live?'Sign & Mint ':'Open ')+(dir==='up'?'Up':'Down')+(live?'':' Position');
-  els.execMode.textContent=live?'● Live · signs on Sui testnet':'Paper trade · connect wallet to mint';
-  els.execMode.className='exec-mode '+(live?'live':'paper');
+  const conn=wallet.connected;
+  els.placeBtn.textContent=(conn?'Sign & Mint ':'Connect & Mint ')+(dir==='up'?'Up':'Down');
+  els.execMode.textContent=conn?'● Live · signs a real mint on Sui testnet':'Connect a Sui wallet to open a position';
+  els.execMode.className='exec-mode '+(conn?'live':'paper');
 }
 function renderWallet(){
   if(wallet.connected){
@@ -859,7 +846,7 @@ async function ensureManager(){
 
 async function realMint(){
   if(!wallet.connected) return connectWallet();
-  if(!cur.live){ toast('Real mint needs a live market','error'); return; }
+  if(!cur || !cur.live){ toast('No live market loaded','error'); return; }
   try{
     const q=quote(digitalUp(cur.svi,cur.forward,strikeScaled));
     const ask=dir==='up'?q.upAsk:q.dnAsk;
@@ -885,19 +872,26 @@ async function realMint(){
     const res=await signExec(tx);
     toast('Confirming on-chain…','pending');
     await wallet.client.waitForTransaction({ digest:res.digest });
-    positions.unshift({ m:cur, dir, strike:strikeScaled, qty:qtyN, cost:ask*qtyN, digest:res.digest, onchain:true });
+    // read the ACTUAL cost the chain charged from the PositionMinted event
+    let realCost=ask*qtyN;
+    try{
+      const tb=await wallet.client.getTransactionBlock({ digest:res.digest, options:{ showEvents:true } });
+      const ev=(tb.events||[]).find(e=>String(e.type).endsWith('PositionMinted'));
+      if(ev?.parsedJson?.cost!=null) realCost=Number(ev.parsedJson.cost)/1e6;
+    }catch{}
+    positions.unshift({ m:cur, dir, strike:strikeScaled, qty:qtyN, cost:realCost, digest:res.digest, onchain:true });
     renderPositions();
-    toast(`Minted ${dir.toUpperCase()} ${qtyN}× on-chain ✓`,'success',res.digest);
+    toast(`Minted ${dir.toUpperCase()} ${qtyN}× · cost ${money(realCost)} ✓`,'success',res.digest);
     refreshAccount();
   }catch(e){ toast('Mint failed: '+(e?.message||e),'error'); console.error(e); }
 }
 
 els.walletBtn.onclick=connectWallet;
-els.placeBtn.onclick=()=>(wallet.connected && cur.live) ? realMint() : openPosition();
+els.placeBtn.onclick=()=>wallet.connected ? realMint() : connectWallet();
 
 /* ── boot ── */
-renderMarketList(); selectMarket(markets[0]); setDir('up');
-requestAnimationFrame(frame); tick(); setDataMode(false); loadLive();
+renderMarketList(); setDir('up');
+requestAnimationFrame(frame); tick(); loadLive();
 /* warm wallet detection shortly after first paint (non-blocking) */
 setTimeout(()=>{ ensureRegistry().catch(()=>{}); }, 900);
 </script>

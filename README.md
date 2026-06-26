@@ -23,9 +23,9 @@ Everything is priced by a faithful in-browser port of DeepBook Predict's on-chai
 |---|---|
 | **Markets / forwards / surface** | **Live** from the DeepBook Predict testnet indexer — a real BTC **term structure** (≈17 min → ~21 days), polled every 5 s. |
 | **Pricing** | **Real** engine — SVI → `N(d₂)` → spread. ATM lands ~48.5%; the book never crosses at the wings. |
-| **Order placement** | **Real on-chain mint** when a Sui wallet is connected (`openUp` PTB); **paper trade** otherwise, revaluing against the live bid. |
+| **Order placement** | **Real on-chain mint only** — connect a Sui wallet and sign the `openUp` PTB; the recorded cost is read back from the `PositionMinted` event. No paper mode. |
 
-If the indexer is ever unreachable, the app falls back to a seeded surface so it always renders — clearly badged `seeded · offline`.
+There is **no seeded/mock data**. If the indexer is unreachable the board shows an error with a **Retry** — never fabricated prices.
 
 ## The on-chain mint
 
