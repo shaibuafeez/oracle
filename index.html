@@ -693,15 +693,31 @@ const wallet={ connected:false, address:null, wallet:null, account:null, client:
 let _sui=null;
 async function loadSui(){
   if(_sui) return _sui;
-  // Pinned + version-aligned: wallet-standard@0.21 peers on @mysten/sui@^2.20,
-  // so esm.sh resolves a SINGLE @mysten/sui copy (no v1/v2 split).
-  const [tx,cl,ws]=await Promise.all([
+  // wallet-standard@0.21 peers @mysten/sui@^2.20 → one aligned copy. We only need
+  // Transaction (build the PTB) + getWallets; every chain read/exec goes through raw
+  // JSON-RPC (rpc()), because @mysten/sui v2 dropped the JSON-RPC SuiClient class.
+  const [tx,ws]=await Promise.all([
     import('https://esm.sh/@mysten/sui@2.20.0/transactions'),
-    import('https://esm.sh/@mysten/sui@2.20.0/client'),
     import('https://esm.sh/@mysten/wallet-standard@0.21.2'),
   ]);
-  _sui={ Transaction:tx.Transaction, SuiClient:cl.SuiClient, getWallets:ws.getWallets };
+  _sui={ Transaction:tx.Transaction, getWallets:ws.getWallets };
   return _sui;
+}
+
+/* Raw JSON-RPC against the testnet fullnode — no SuiClient dependency. */
+async function rpc(method, params){
+  const r=await fetch(CFG.rpc, { method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ jsonrpc:'2.0', id:1, method, params }) });
+  const j=await r.json();
+  if(j.error) throw new Error(j.error.message||JSON.stringify(j.error));
+  return j.result;
+}
+async function waitTx(digest, tries=24){
+  for(let i=0;i<tries;i++){
+    try{ return await rpc('sui_getTransactionBlock',[digest,{showEvents:true,showObjectChanges:true,showEffects:true}]); }
+    catch{ await new Promise(r=>setTimeout(r,700)); }
+  }
+  throw new Error('transaction not indexed in time');
 }
 
 /* Wallet registry — initialized early and kept fresh via register/unregister
@@ -760,12 +776,11 @@ async function doConnect(w){
   hideWalletMenu();
   try{
     toast(`Connecting ${w.name}…`,'pending');
-    const { SuiClient }=await loadSui();
+    await loadSui();
     await w.features['standard:connect'].connect();
     const acct=(w.accounts||[]).find(a=>(a.chains||[]).some(c=>String(c).startsWith('sui:'))) || (w.accounts||[])[0];
     if(!acct) throw new Error('wallet authorized no account');
     wallet.wallet=w; wallet.account=acct; wallet.address=acct.address; wallet.connected=true;
-    wallet.client=new SuiClient({ url:CFG.rpc });
     if(w.features['standard:events']){
       try{ wallet._off=w.features['standard:events'].on('change', ()=>{
         const a=(w.accounts||[])[0];
@@ -808,8 +823,8 @@ document.addEventListener('click',e=>{ const m=$('walletMenu');
 
 async function refreshAccount(){
   try{
-    const coins=await wallet.client.getCoins({ owner:wallet.address, coinType:CFG.dusdc, limit:50 });
-    wallet.coins=coins.data||[];
+    const res=await rpc('suix_getCoins',[wallet.address, CFG.dusdc, null, 50]);
+    wallet.coins=res.data||[];
     wallet.dusdc=wallet.coins.reduce((s,c)=>s+Number(c.balance),0)/1e6;
   }catch(e){ console.warn('coins',e); }
   try{ const ms=asArr(await fetchJSON(`${SERVER}/managers?owner=${wallet.address}`)); if(ms.length) wallet.managerId=ms[0].manager_id; }catch{}
@@ -819,12 +834,16 @@ async function refreshAccount(){
 async function signExec(tx){
   if(tx.setSenderIfNotSet) tx.setSenderIfNotSet(wallet.address); else tx.setSender(wallet.address);
   const f=wallet.wallet.features, chain='sui:testnet';
-  if(f['sui:signAndExecuteTransaction'])
-    return await f['sui:signAndExecuteTransaction'].signAndExecuteTransaction({ transaction:tx, account:wallet.account, chain });
-  if(f['sui:signTransaction']){                          // sign in wallet, broadcast via our client
+  if(f['sui:signAndExecuteTransaction']){                // wallet signs AND executes
+    const r=await f['sui:signAndExecuteTransaction'].signAndExecuteTransaction({ transaction:tx, account:wallet.account, chain });
+    if(!r?.digest) throw new Error('wallet returned no digest');
+    return { digest:r.digest };
+  }
+  if(f['sui:signTransaction']){                          // wallet signs; we broadcast via JSON-RPC
     const s=await f['sui:signTransaction'].signTransaction({ transaction:tx, account:wallet.account, chain });
     const bytes=s.bytes ?? s.transactionBytes;
-    return await wallet.client.executeTransactionBlock({ transactionBlock:bytes, signature:s.signature, options:{ showEffects:true } });
+    const r=await rpc('sui_executeTransactionBlock',[bytes,[s.signature],{showEffects:true},'WaitForLocalExecution']);
+    return { digest:r.digest };
   }
   throw new Error('this wallet cannot sign transactions');
 }
@@ -836,9 +855,8 @@ async function ensureManager(){
   const tx=new Transaction();
   tx.moveCall({ target:`${CFG.pkg}::predict::create_manager`, arguments:[] });
   const res=await signExec(tx);
-  await wallet.client.waitForTransaction({ digest:res.digest });
-  const tb=await wallet.client.getTransactionBlock({ digest:res.digest, options:{ showObjectChanges:true } });
-  const made=(tb.objectChanges||[]).find(c=>c.type==='created' && String(c.objectType).includes('::predict_manager::PredictManager'));
+  const tb=await waitTx(res.digest);
+  const made=(tb.objectChanges||[]).find(c=>c.type==='created' && String(c.objectType||'').includes('::predict_manager::PredictManager'));
   if(!made) throw new Error('PredictManager not found in tx');
   wallet.managerId=made.objectId; renderWallet();
   return wallet.managerId;
@@ -871,14 +889,11 @@ async function realMint(){
     toast('Approve in your wallet…','pending');
     const res=await signExec(tx);
     toast('Confirming on-chain…','pending');
-    await wallet.client.waitForTransaction({ digest:res.digest });
+    const tb=await waitTx(res.digest);                              // poll JSON-RPC until indexed
     // read the ACTUAL cost the chain charged from the PositionMinted event
     let realCost=ask*qtyN;
-    try{
-      const tb=await wallet.client.getTransactionBlock({ digest:res.digest, options:{ showEvents:true } });
-      const ev=(tb.events||[]).find(e=>String(e.type).endsWith('PositionMinted'));
-      if(ev?.parsedJson?.cost!=null) realCost=Number(ev.parsedJson.cost)/1e6;
-    }catch{}
+    const ev=(tb.events||[]).find(e=>String(e.type).endsWith('PositionMinted'));
+    if(ev?.parsedJson?.cost!=null) realCost=Number(ev.parsedJson.cost)/1e6;
     positions.unshift({ m:cur, dir, strike:strikeScaled, qty:qtyN, cost:realCost, digest:res.digest, onchain:true });
     renderPositions();
     toast(`Minted ${dir.toUpperCase()} ${qtyN}× · cost ${money(realCost)} ✓`,'success',res.digest);
