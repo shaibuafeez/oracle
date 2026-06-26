@@ -753,7 +753,7 @@ function renderWallet(){
   if(wallet.connected){
     els.walletBtn.textContent=wallet.address.slice(0,6)+'…'+wallet.address.slice(-4);
     els.walletBtn.title=wallet.address; els.walletBtn.classList.add('on');
-    els.walletSub.textContent=`${wallet.dusdc!=null?wallet.dusdc.toFixed(2):'…'} DUSDC · manager ${wallet.managerId?'✓':'—'}`;
+    els.walletSub.textContent=`${wallet.dusdc!=null?wallet.dusdc.toFixed(2):'…'} DUSDC`+(wallet.managerId?` · mgr ${(wallet.managerBal||0).toFixed(2)}`:' · no manager');
   } else { els.walletBtn.textContent='Connect Wallet'; els.walletBtn.classList.remove('on'); els.walletSub.textContent=''; }
   refreshExec();
 }
@@ -795,7 +795,7 @@ async function disconnectWallet(){
   hideWalletMenu();
   try{ await wallet.wallet?.features?.['standard:disconnect']?.disconnect(); }catch{}
   try{ wallet._off && wallet._off(); }catch{}
-  Object.assign(wallet,{ connected:false, address:null, wallet:null, account:null, managerId:null, coins:[], dusdc:null, _off:null });
+  Object.assign(wallet,{ connected:false, address:null, wallet:null, account:null, managerId:null, managerBal:null, coins:[], dusdc:null, _off:null });
   renderWallet(); toast('Wallet disconnected');
 }
 
@@ -811,9 +811,13 @@ function showWalletPicker(){
 function toggleWalletMenu(){
   const m=$('walletMenu'); if(!m.hidden){ m.hidden=true; return; }
   const a=wallet.address;
+  const mgr = wallet.managerId
+    ? `<button class="wm-item" data-act="withdraw"><span>Withdraw manager balance${wallet.managerBal?` · ${wallet.managerBal.toFixed(2)} DUSDC`:''}</span></button>` : '';
   m.innerHTML=`<div class="wm-h">${a.slice(0,10)}…${a.slice(-6)}</div>
+    ${mgr}
     <button class="wm-item" data-act="scan"><span>View on Suiscan ↗</span></button>
     <button class="wm-item" data-act="disc"><span>Disconnect</span></button>`;
+  const wb=m.querySelector('[data-act=withdraw]'); if(wb) wb.onclick=withdrawManager;
   m.querySelector('[data-act=scan]').onclick=()=>{ window.open('https://suiscan.xyz/testnet/account/'+a,'_blank'); hideWalletMenu(); };
   m.querySelector('[data-act=disc]').onclick=disconnectWallet;
   m.hidden=false;
@@ -828,6 +832,7 @@ async function refreshAccount(){
     wallet.dusdc=wallet.coins.reduce((s,c)=>s+Number(c.balance),0)/1e6;
   }catch(e){ console.warn('coins',e); }
   try{ const ms=asArr(await fetchJSON(`${SERVER}/managers?owner=${wallet.address}`)); if(ms.length) wallet.managerId=ms[0].manager_id; }catch{}
+  if(wallet.managerId){ try{ wallet.managerBal=Number(await managerBalance())/1e6; }catch{} }
   renderWallet();
 }
 
@@ -860,6 +865,43 @@ async function ensureManager(){
   if(!made) throw new Error('PredictManager not found in tx');
   wallet.managerId=made.objectId; renderWallet();
   return wallet.managerId;
+}
+
+/* read the manager's free DUSDC balance (µDUSDC) from its DeepBook BalanceManager bag */
+async function managerBalance(){
+  if(!wallet.managerId) return 0n;
+  const mo=await rpc('sui_getObject',[wallet.managerId,{showContent:true}]);
+  const bagId=mo?.data?.content?.fields?.balance_manager?.fields?.balances?.fields?.id?.id;
+  if(!bagId) return 0n;
+  const dfs=await rpc('suix_getDynamicFields',[bagId,null,50]);
+  const field=(dfs?.data||[]).find(f=>{ const t=String(f.name?.type||''); return t.includes('BalanceKey<') && t.includes('::dusdc::DUSDC'); });
+  if(!field) return 0n;
+  const fo=await rpc('sui_getObject',[field.objectId,{showContent:true}]);
+  const v=fo?.data?.content?.fields?.value;
+  return v ? BigInt(v) : 0n;
+}
+
+/* withdraw the manager's whole free DUSDC balance back to the wallet */
+async function withdrawManager(){
+  hideWalletMenu();
+  try{
+    if(!wallet.managerId) await refreshAccount();
+    if(!wallet.managerId){ toast('No manager yet — open a position first','error'); return; }
+    toast('Reading manager balance…','pending');
+    const amt=await managerBalance();
+    if(amt<=0n){ toast('Manager has no withdrawable DUSDC','error'); return; }
+    const { Transaction }=await loadSui();
+    const tx=new Transaction();
+    const coin=tx.moveCall({ target:`${CFG.pkg}::predict_manager::withdraw`, typeArguments:[CFG.dusdc],
+      arguments:[tx.object(wallet.managerId), tx.pure.u64(amt)] });
+    tx.transferObjects([coin], wallet.address);
+    toast('Approve withdrawal in your wallet…','pending');
+    const res=await signExec(tx);
+    toast('Confirming…','pending');
+    await waitTx(res.digest);
+    toast(`Withdrew ${money(Number(amt)/1e6)} DUSDC to your wallet ✓`,'success',res.digest);
+    refreshAccount();
+  }catch(e){ toast('Withdraw failed: '+(e?.message||e),'error'); console.error(e); }
 }
 
 async function realMint(){
